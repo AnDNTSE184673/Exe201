@@ -1,7 +1,12 @@
 using HealthMate.Repository.DTOs.Transaction;
+using HealthMate.Repository.Interface.PremiumPackage;
 using HealthMate.Repository.Interface.Transaction;
 using HealthMate.Repository.Interface.User;
+using HealthMate.Repository.Models;
+using HealthMate.Services.Helpers;
 using HealthMate.Services.Interface.Transaction;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Configuration;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -13,24 +18,44 @@ namespace HealthMate.Services.Service.Transaction
     {
         private readonly ITransactionRepository _repo;
         private readonly IUserRepository _userRepo;
+        private readonly IPremiumPackageRepository _packageRepo;
         private readonly Random _random = new Random();
+        private readonly IConfiguration _configuration;
 
-        public TransactionService(ITransactionRepository repo, IUserRepository userRepo)
+        public TransactionService(ITransactionRepository repo, IUserRepository userRepo, IConfiguration configuration, IPremiumPackageRepository packageRepo)
         {
             _repo = repo;
             _userRepo = userRepo;
+            _configuration = configuration;
+            _packageRepo = packageRepo;
         }
 
         public async Task<List<TransactionDTO>> GetAllByUserIdAsync(int userId)
         {
             var transactions = await _repo.GetAllByUserIdAsync(userId);
-            return transactions.Select(MapToDTO).ToList();
+            var user = await _userRepo.GetByIdAsync(userId);
+            List<TransactionDTO> transactionDTOs = new List<TransactionDTO>();
+            foreach (var transaction in transactions)
+            {
+                transactionDTOs.Add(MapToDTO(transaction));
+            }
+            foreach (var dto in transactionDTOs)
+            {
+                dto.FullName = user?.FullName ?? "Unknown";
+                dto.Email = user?.Email ?? "Unknown";
+            }
+            return transactionDTOs;
         }
 
         public async Task<TransactionDTO?> GetByIdAsync(int transactionId, int userId)
         {
             var transaction = await _repo.GetByIdAsync(transactionId, userId);
-            return transaction != null ? MapToDTO(transaction) : null;
+            if (transaction == null) return null;
+            var user = await _userRepo.GetByIdAsync(userId);
+            TransactionDTO transactionDTO = MapToDTO(transaction);
+            transactionDTO.FullName = user?.FullName ?? "Unknown";
+            transactionDTO.Email = user?.Email ?? "Unknown";
+            return transactionDTO;
         }
 
         public async Task<TransactionDTO> CreateAsync(int userId, CreateTransactionRequest request)
@@ -115,6 +140,8 @@ namespace HealthMate.Services.Service.Transaction
                 Amount = transaction.Amount,
                 Status = transaction.Status,
                 PurchasedAt = transaction.PurchasedAt,
+                CreatedDate = transaction.CreatedDate ?? transaction.PurchasedAt,
+                ExpiryDate = transaction.ExpiredDate,
                 PackageName = transaction.Package?.PackageName ?? "Unknown",
                 PaymentMethodName = transaction.PaymentMethod?.MethodName ?? "Unknown"
             };
@@ -125,5 +152,172 @@ namespace HealthMate.Services.Service.Transaction
             // Generate a unique transaction code (e.g., TRX-2024-XXXXX)
             return $"TRX-{DateTime.UtcNow:yyyy}-{_random.Next(10000, 99999)}";
         }
+
+        public async Task<string> CreateVNPayPaymentUrl(TransactionDTO transaction, HttpContext httpContext)
+        {
+            var vnp_Url = "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html";
+            var returnUrl = "https://yourdomain.com/api/payment/vnpay-return";
+            var tmnCode = _configuration["VNPay:TmnCode"];
+            var hashSecret = _configuration["VNPay:HashSecret"];
+
+            var vnPay = new VnPayLibrary();
+            vnPay.AddRequestData("vnp_Version", "2.1.0");
+            vnPay.AddRequestData("vnp_Command", "pay");
+            vnPay.AddRequestData("vnp_TmnCode", tmnCode);
+            vnPay.AddRequestData("vnp_Amount", ((int)(transaction.Amount * 100)).ToString());
+            vnPay.AddRequestData("vnp_CreateDate", DateTime.UtcNow.ToString("yyyyMMddHHmmss"));
+            vnPay.AddRequestData("vnp_CurrCode", "VND");
+            vnPay.AddRequestData("vnp_IpAddr", httpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1");
+            vnPay.AddRequestData("vnp_Locale", "vn");
+            vnPay.AddRequestData("vnp_OrderInfo", $"Payment for transaction {transaction.TransactionCode}");
+            vnPay.AddRequestData("vnp_OrderType", "other");
+            vnPay.AddRequestData("vnp_ReturnUrl", returnUrl);
+            vnPay.AddRequestData("vnp_TxnRef", transaction.TransactionCode);
+
+            return vnPay.CreateRequestUrl(vnp_Url, hashSecret);
+        }
+
+        public async Task<List<TransactionDTONew>> GetAllTransaction()
+        {
+            List<TransactionDTONew> transactions = new List<TransactionDTONew>();
+            var list = await _repo.GetAllTransactionAsync();
+            if (list == null || !list.Any()) return transactions;
+            foreach (var item in list)
+            {
+                var package = await _packageRepo.GetByIdAsync(item.PackageId);
+                var user = await _userRepo.GetByIdAsync(item.UserId);
+                transactions.Add(new TransactionDTONew
+                {
+                    TransactionId = item.TransactionId,
+                    UserId = item.UserId,
+                    FullName = user?.FullName ?? "Unknown",
+                    Email = user?.Email ?? "Unknown",
+                    PackagePrice = item.Package?.Price ?? 0,
+                    PackageName = package?.PackageName ?? "Unknown",
+                    Status = item.Status,
+                    CreatedDate = (DateTime)(item.CreatedDate != default ? item.CreatedDate : item.PurchasedAt),
+                    PaymentDate = item.PurchasedAt,
+                    ExpiryDate = item.Status == "Paid" ? new DateTime(item.PurchasedAt.Year, item.PurchasedAt.Month, item.PurchasedAt.Day)
+                        .AddDays(package?.DurationDays ?? 0) : null
+                });
+            }
+            return transactions;
+        }
+
+        public async Task<CreateNewTransactionReponse> CreateNewTransactionAsync(string email, int packageId)
+        {
+            var user = await _userRepo.GetByEmailAsync(email);
+            if (user == null) throw new ArgumentException("User not found", nameof(email));            
+            var pack = await _packageRepo.GetByIdAsync(packageId);
+            if (pack == null) throw new ArgumentException("Package not found", nameof(packageId));
+            var transaction = new Repository.Models.Transaction
+            {
+                UserId = user.UserId,
+                PackageId = packageId,
+                PaymentMethodId = 1, // Banking is assumed as default
+                TransactionCode = GenerateTransactionCode(),
+                Amount = pack.Price,
+                Status = "Unpaid",
+                CreatedDate = DateTime.UtcNow,
+            };
+            var createdTransaction = await _repo.CreateAsync(transaction);
+            return new CreateNewTransactionReponse
+            {
+                TransactionId = createdTransaction.TransactionId,
+                UserId = user.UserId,
+                PackageId = packageId,
+                Status = "Unpaid",
+                CreatedDate = DateTime.UtcNow
+            };
+        }
+
+        public async Task<TransactionDTONew?> GetTransactionByIdAsync(int transactionId)
+        {
+            var transaction = await _repo.GetTransactionByIdAsync(transactionId);
+            if (transaction == null) return null;
+            var package = await _packageRepo.GetByIdAsync(transaction.PackageId);
+            var user = await _userRepo.GetByIdAsync(transaction.UserId);
+            TransactionDTONew transactionDTO = new TransactionDTONew
+            {
+                TransactionId = transaction.TransactionId,
+                UserId = transaction.UserId,
+                FullName = user?.FullName ?? "Unknown",
+                Email = user?.Email ?? "Unknown",
+                PackagePrice = package?.Price ?? 0,
+                PackageName = package?.PackageName ?? "Unknown",
+                Status = transaction.Status,
+                CreatedDate = (DateTime)(transaction.CreatedDate != default ? transaction.CreatedDate : transaction.PurchasedAt),
+                PaymentDate = transaction.PurchasedAt,
+                ExpiryDate = transaction.Status == "Paid" ? new DateTime(transaction.PurchasedAt.Year, transaction.PurchasedAt.Month, transaction.PurchasedAt.Day).AddDays(package?.DurationDays ?? 0) : null
+            };
+            return transactionDTO;
+        }
+
+        public async Task<List<TransactionDTONew>?> GetTransactionByUserIdAsync(int userId)
+        {
+            List<TransactionDTONew> transactions = new List<TransactionDTONew>();
+            var items = await _repo.GetAllByUserIdAsync(userId);
+            if (items == null) return new List<TransactionDTONew>();
+            foreach (var item in items)
+            {
+                var package = await _packageRepo.GetByIdAsync(item.PackageId);
+                transactions.Add(new TransactionDTONew
+                {
+                    TransactionId = item.TransactionId,
+                    UserId = item.UserId,
+                    FullName = item.User?.FullName ?? "Unknown",
+                    Email = item.User?.Email ?? "Unknown",
+                    PackagePrice = package?.Price ?? 0,
+                    PackageName = package?.PackageName ?? "Unknown",
+                    Status = item.Status,
+                    CreatedDate = (DateTime)(item.CreatedDate != default ? item.CreatedDate : item.PurchasedAt),
+                    PaymentDate = item.PurchasedAt,
+                    ExpiryDate = item.Status == "Paid" ? new DateTime(item.PurchasedAt.Year, item.PurchasedAt.Month, item.PurchasedAt.Day).AddDays(package?.DurationDays ?? 0) : null
+                });
+            }
+            return transactions;
+        }
+
+        public async Task<TransactionDTONew> UpdateStatuePaidAsync(int transactionId, int userId, int packageId)
+        {
+            var transaction = await _repo.GetByIdAsync(transactionId, userId);
+            var user = await _userRepo.GetByIdAsync(userId);
+            if (transaction == null) throw new ArgumentException("Transaction not found", nameof(transactionId));
+            var package = await _packageRepo.GetByIdAsync(packageId);
+            if (package == null) throw new ArgumentException("Package not found", nameof(packageId));
+            transaction.Status = "Paid";
+            transaction.PurchasedAt = DateTime.UtcNow;
+            transaction.ExpiredDate = new DateTime(transaction.PurchasedAt.Year, transaction.PurchasedAt.Month, transaction.PurchasedAt.Day)
+                .AddDays(package.DurationDays);
+            user.PremiumExpiry = transaction.ExpiredDate; 
+            await _userRepo.UpdateUserAsync(user);
+            var updatedTransaction = await _repo.UpdateTransactionAsync(transaction);
+            if (updatedTransaction == null) throw new InvalidOperationException("Failed to update transaction status");
+            List<Repository.Models.Transaction> transactions = await _repo.GetAllByUserIdAsync(userId);
+            foreach (var item in transactions)
+            {
+                if (item.Status == "Unpaid")
+                {
+                    item.Status = "Expired"; // Expire other paid transactions
+                    await _repo.UpdateTransactionAsync(item);
+                }
+            }
+            return updatedTransaction;
+        }
+
+        public async Task<TransactionDTONew> UpdateStatueExpiredAsync(int transactionId)
+        {
+            var trans = await _repo.GetTransactionByIdAsync(transactionId);
+            if (trans == null) throw new ArgumentException("Transaction not found", nameof(transactionId));
+            trans.Status = "Expired";
+            var updatedTransaction = await _repo.UpdateTransactionAsync(trans);
+            if (updatedTransaction == null) throw new InvalidOperationException("Failed to update transaction status");
+            return updatedTransaction;
+        }
+
+        public async Task<bool> DeleteTransactionAsync(int transactionId)
+        {
+            return await _repo.DeleteTransactionAsync(transactionId);
+        }
     }
-} 
+}

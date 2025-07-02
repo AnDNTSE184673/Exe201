@@ -1,9 +1,8 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
     View,
     Text,
     StyleSheet,
-    Image,
     TouchableOpacity,
     ScrollView,
 } from "react-native";
@@ -12,29 +11,75 @@ import {
     Bookmark,
     Timer,
     Pencil,
-    Headset
+    Headset,
+    Crown,
 } from "lucide-react-native";
 import { useRouter } from "expo-router";
 import Colors from "@/constants/colors";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Image } from "expo-image";
+import { API_URL } from "@env";
 
 export default function ProfileScreen() {
     const router = useRouter();
+    const [fullName, setFullName] = useState("Người dùng");
+    const [email, setEmail] = useState("example@gmail.com");
+    const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+    const [premiumExpiry, setPremiumExpiry] = useState<string | null>(null); // ✅ store premiumExpiry
+
+    useEffect(() => {
+        const fetchUserInfo = async () => {
+            try {
+                const storedEmail = await AsyncStorage.getItem("email");
+                if (!storedEmail) return;
+
+                setEmail(storedEmail);
+
+                const response = await fetch(
+                    `${API_URL}/User/all_user_by_email/${storedEmail}`
+                );
+                const userArray = await response.json();
+
+                if (response.ok && userArray.length > 0) {
+                    const user = userArray[0];
+                    setFullName(user.fullName || "Người dùng");
+                    setAvatarUrl(user.avatarUrl);
+                    setEmail(user.email || storedEmail);
+                    setPremiumExpiry(user.premiumExpiry || null);
+                }
+            } catch (error) {
+                console.error("Lỗi khi lấy thông tin người dùng:", error);
+            }
+        };
+        fetchUserInfo();
+    }, []);
 
     return (
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-            <TouchableOpacity style={styles.editIcon} onPress={() => router.replace("/(setting)/editProfile")}>
+            <TouchableOpacity
+                style={styles.editIcon}
+                onPress={() => router.replace("/(setting)/editProfile")}
+            >
                 <Pencil size={22} color={Colors.text} />
             </TouchableOpacity>
 
             <Image
-                source={{
-                    uri: "https://randomuser.me/api/portraits/women/44.jpg",
-                }}
+                source={
+                    avatarUrl
+                        ? avatarUrl
+                        : "https://cdn-icons-png.flaticon.com/512/847/847969.png"
+                }
                 style={styles.avatar}
+                contentFit="cover"
             />
 
-            <Text style={styles.name}>Jennifer Lopez</Text>
-            <Text style={styles.email}>taylorslauren@hotmail.com</Text>
+            <View style={styles.nameRow}>
+                <Text style={styles.name}>{fullName}</Text>
+                {premiumExpiry !== null && (
+                    <Crown size={24} color="#FFB800" style={styles.crownIcon} />
+                )}
+            </View>
+            <Text style={styles.email}>{email}</Text>
 
             <View style={styles.cardList}>
                 <OptionCard icon={<CreditCard color="#4E7D28" />} text="Lịch sử thanh toán" route="/(setting)/payHistory" />
@@ -44,7 +89,16 @@ export default function ProfileScreen() {
             </View>
 
             <View style={styles.footer}>
-                <TouchableOpacity onPress={() => router.replace("/(authentication)/login")}>
+                <TouchableOpacity
+                    onPress={async () => {
+                        const agree = await AsyncStorage.getItem("agree");
+                        if (agree !== "true") {
+                            await AsyncStorage.removeItem("email");
+                            await AsyncStorage.removeItem("password");
+                        }
+                        router.replace("/(authentication)/login");
+                    }}
+                >
                     <Text style={styles.footerLink}>Đăng xuất</Text>
                 </TouchableOpacity>
 
@@ -56,10 +110,10 @@ export default function ProfileScreen() {
                     <Text style={styles.deleteLink}>Xoá tài khoản</Text>
                 </TouchableOpacity>
             </View>
-
         </ScrollView>
     );
 }
+
 
 function OptionCard({
     icon,
@@ -113,18 +167,29 @@ const styles = StyleSheet.create({
         color: "#777",
         marginBottom: 24,
     },
+    nameRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 4,
+        marginLeft: 5
+    },
+    crownIcon: {
+        marginLeft: 5,
+    },
     cardList: {
         width: "100%",
         gap: 12,
     },
     card: {
-        backgroundColor: "#F6F8F4",
+        backgroundColor: "#fafafa",
         borderRadius: 12,
         padding: 16,
         flexDirection: "row",
         alignItems: "center",
         height: 70,
-
+        borderWidth: 1,
+        borderColor: "#ddd",
     },
     iconBox: {
         width: 24,

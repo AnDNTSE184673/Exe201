@@ -16,4 +16,10 @@ public partial class Article
     public DateTime PublishedAt { get; set; }
 
     public DateTime? UpdatedAt { get; set; }
+
+    public string? ImageUrl { get; set; }
+
+    public int Likes { get; set; }
+
+    public virtual ICollection<ArticleTagMapping> ArticleTagMappings { get; set; } = new List<ArticleTagMapping>();
 }

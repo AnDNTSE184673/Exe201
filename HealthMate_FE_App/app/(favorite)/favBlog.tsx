@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
     View,
     Text,
@@ -12,33 +12,47 @@ import {
 import { useRouter } from "expo-router";
 import { ChevronLeft, Heart } from "lucide-react-native";
 import Colors from "@/constants/colors";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useFocusEffect } from "@react-navigation/native";
 
 export default function FavoriteBlog() {
     const router = useRouter();
+    const [favoriteBlogs, setFavoriteBlogs] = useState<any[]>([]);
+
+    useFocusEffect(
+        React.useCallback(() => {
+            const loadFavorites = async () => {
+                const stored = await AsyncStorage.getItem("favoriteBlogs");
+                const blogs = stored ? JSON.parse(stored) : [];
+                setFavoriteBlogs(blogs);
+            };
+
+            loadFavorites();
+
+            return () => { };
+        }, [])
+    );
 
     const getTagStyle = (tag: string) => {
         switch (tag.toLowerCase()) {
             case "dinh dưỡng":
                 return { backgroundColor: "#f3e8ff", color: "#7e22ce" };
             case "giảm cân":
-                return { backgroundColor: "#dcfce7", color: "#16a34a" };
+                return { backgroundColor: "#fef3c7", color: "#f97316" };
+            case "thể dục":
+                return { backgroundColor: "#dbeafe", color: "#1d4ed8" };
+            case "sức khỏe":
+                return { backgroundColor: "#fef9c3", color: "#ca8a04" };
+            case "yoga":
+                return { backgroundColor: "#fae8ff", color: "#a21caf" };
+            case "ăn chay":
+                return { backgroundColor: "#bbf7d0", color: "#15803d" };
+            case "ăn kiêng":
+                return { backgroundColor: "#fee2e2", color: "#b91c1c" };
             default:
                 return { backgroundColor: "#e5e7eb", color: "#374151" };
         }
     };
-
-    const favoriteRecipes = [
-        {
-            title: "Trứng rán mỡ ăn có tốt cho sức khỏe không",
-            likes: 26,
-            image: "https://images.unsplash.com/photo-1604999333679-b86d54738315?q=80&w=200",
-        },
-        {
-            title: "Bắp xào bơ ăn lúc nào là hợp lý",
-            likes: 88,
-            image: "https://images.unsplash.com/photo-1604999333679-b86d54738315?q=80&w=200",
-        },
-    ];
 
     return (
         <KeyboardAvoidingView
@@ -54,38 +68,43 @@ export default function FavoriteBlog() {
 
             <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
                 <Text style={styles.title}>Bài viết yêu thích</Text>
+                {favoriteBlogs.length === 0 ? (
+                    <Text style={styles.noFavoriteText}>
+                        Không có bài viết nào trong danh sách yêu thích.
+                    </Text>
+                ) : (
+                    favoriteBlogs.map((item, idx) => (
+                        <View key={idx} style={styles.fullRecipeCard}>
+                            <Image source={{ uri: item.imageUrl }} style={styles.fullRecipeImage} />
+                            <View style={styles.fullRecipeInfo}>
+                                <Text style={styles.fullRecipeTitle}>{item.title}</Text>
 
-                {favoriteRecipes.map((item, idx) => (
-                    <View key={idx} style={styles.fullRecipeCard}>
-                        <Image source={{ uri: item.image }} style={styles.fullRecipeImage} />
-                        <View style={styles.fullRecipeInfo}>
-                            <Text style={styles.fullRecipeTitle}>{item.title}</Text>
-
-                            <View style={styles.tagsContainer}>
-                                {["Dinh dưỡng", "Giảm cân"].map((tag, i) => (
-                                    <View
-                                        key={i}
-                                        style={[styles.tag, { backgroundColor: getTagStyle(tag).backgroundColor }]}
-                                    >
-                                        <Text style={[styles.tagText, { color: getTagStyle(tag).color }]}>
-                                            {tag}
-                                        </Text>
-                                    </View>
-                                ))}
-                            </View>
-
-                            <View style={styles.bottomRow}>
-                                <View style={styles.likesContainer}>
-                                    <Heart size={12} color={Colors.rating} fill={Colors.rating} />
-                                    <Text style={styles.likesText}>{item.likes}</Text>
+                                <View style={styles.tagsContainer}>
+                                    {item.tags.map((tag: any, i: number) => (
+                                        <View
+                                            key={i}
+                                            style={[styles.tag, { backgroundColor: getTagStyle(tag.tagName).backgroundColor }]}
+                                        >
+                                            <Text style={[styles.tagText, { color: getTagStyle(tag.tagName).color }]}>
+                                                {tag.tagName}
+                                            </Text>
+                                        </View>
+                                    ))}
                                 </View>
-                                <TouchableOpacity onPress={() => router.push(`/(favorite)/blogFavDetail`)}>
-                                    <Text style={styles.detailLink}>Xem chi tiết &gt;</Text>
-                                </TouchableOpacity>
+
+                                <View style={styles.bottomRow}>
+                                    <View style={styles.likesContainer}>
+                                        <Heart size={12} color={Colors.rating} fill={Colors.rating} />
+                                        <Text style={styles.likesText}>{item.likesCount ?? 0}</Text>
+                                    </View>
+                                    <TouchableOpacity onPress={() => router.push(`/(blog)/blogDetail?id=${item.articleId}`)}>
+                                        <Text style={styles.detailLink}>Xem chi tiết &gt;</Text>
+                                    </TouchableOpacity>
+                                </View>
                             </View>
                         </View>
-                    </View>
-                ))}
+                    ))
+                )}
             </ScrollView>
         </KeyboardAvoidingView>
     );
@@ -95,6 +114,13 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: "#fff",
+    },
+    noFavoriteText: {
+        marginTop: 10,
+        fontSize: 16,
+        textAlign: "center",
+        color: "#999",
+        fontStyle: "italic",
     },
     content: {
         padding: 24,

@@ -1,5 +1,5 @@
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { useRouter } from "expo-router";
 import {
   StyleSheet,
@@ -8,27 +8,29 @@ import {
   SafeAreaView,
   FlatList,
   TouchableOpacity,
+  ActivityIndicator
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image } from "expo-image";
-import { Crown } from "lucide-react-native";
+import { Crown, Calendar } from "lucide-react-native";
 import { Feather } from '@expo/vector-icons';
 import SectionHeader from "../components/SectionHeader";
 import FeatureCard from "../components/FeatureCard";
 import BlogCard from "../components/BlogCard";
-import { destinations } from "@/constants/destinations";
+import RecipeCard from "../components/RecipeCard";
 import Colors from "@/constants/colors";
-import { Calendar } from "lucide-react-native";
 import dayjs from "dayjs";
 import "dayjs/locale/vi";
+import { API_URL } from "@env";
 
 dayjs.locale("vi");
-
 
 const DATA = [
   { type: "header" },
   { type: "date" },
   { type: "features" },
   { type: "post" },
+  { type: "recipe" },
 ];
 
 const capitalizeWords = (str: string) =>
@@ -39,8 +41,83 @@ const capitalizeWords = (str: string) =>
 const today = dayjs().format("dddd, [Ngày] DD [Tháng] MM [Năm] YYYY");
 const formattedDate = capitalizeWords(today);
 
+type Recipe = {
+  recipeId: number;
+  title: string;
+  imageUrl: string;
+  likes: number;
+  categories?: {
+    categoryId: number;
+    categoryName: string;
+  }[] | null;
+};
+
 export default function Home() {
   const router = useRouter();
+  const [fullName, setFullName] = useState("Người dùng");
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [premiumExpiry, setPremiumExpiry] = useState<string | null>(null);
+  const [popularArticles, setPopularArticles] = useState<any[]>([]);
+  const [loadingPopular, setLoadingPopular] = useState(true);
+  const [popularRecipes, setPopularRecipes] = useState<Recipe[]>([]);
+  const [loadingPopularRecipe, setLoadingPopularRecipe] = useState(true);
+
+  useEffect(() => {
+    const fetchUserFullName = async () => {
+      try {
+        const email = await AsyncStorage.getItem("email");
+        if (!email) return;
+
+        const response = await fetch(`${API_URL}/User/all_user_by_email/${email}`);
+        const userArray = await response.json();
+
+        if (response.ok && userArray.length > 0) {
+          setFullName(userArray[0].fullName || "Người dùng");
+          setAvatarUrl(userArray[0].avatarUrl);
+          setPremiumExpiry(userArray[0].premiumExpiry);
+
+        }
+      } catch (error) {
+        console.error("Lỗi khi lấy thông tin người dùng:", error);
+      }
+    };
+
+    const fetchPopularArticles = async () => {
+      try {
+        const response = await fetch(`${API_URL}/Article/popular`);
+        const data = await response.json();
+        if (response.ok) {
+          setPopularArticles(data);
+        } else {
+          console.error("Failed to fetch popular articles.");
+        }
+      } catch (error) {
+        console.error("Error fetching popular articles:", error);
+      } finally {
+        setLoadingPopular(false);
+      }
+    };
+
+    const fetchPopularRecipes = async () => {
+      try {
+        const response = await fetch(`${API_URL}/Recipe/popular`);
+        const data = await response.json();
+        if (response.ok) {
+          setPopularRecipes(data);
+        } else {
+          console.error("Failed to fetch popular recipes.");
+        }
+      } catch (error) {
+        console.error("Error fetching popular recipes:", error);
+      } finally {
+        setLoadingPopularRecipe(false);
+      }
+    };
+
+    fetchPopularRecipes();
+    fetchPopularArticles();
+    fetchUserFullName();
+  }, []);
 
   const renderItem = ({ item }: any) => {
     switch (item.type) {
@@ -50,17 +127,28 @@ export default function Home() {
             <View style={styles.userInfo}>
               <View style={styles.avatarContainer}>
                 <Image
-                  source={"https://images.unsplash.com/photo-1506973035872-a4ec16b8e8d9?q=80&w=200"}
+                  source={
+                    avatarUrl
+                      ? avatarUrl
+                      : "https://cdn-icons-png.flaticon.com/512/847/847969.png"
+                  }
                   style={styles.avatar}
+                  contentFit="cover"
                 />
               </View>
               <View>
                 <Text style={styles.welcomeText}>Chào mừng</Text>
-                <Text style={styles.userName}>Nguyen Tran</Text>
+                <Text style={styles.userName}>{fullName}</Text>
               </View>
             </View>
-            <TouchableOpacity onPress={() => router.replace("/(premium)/list")} style={styles.notificationButton}>
-              <Crown size={24} color={Colors.text} />
+            <TouchableOpacity
+              onPress={() => router.replace("/(premium)/list")}
+              style={styles.notificationButton}
+            >
+              <Crown
+                size={24}
+                color={premiumExpiry ? Colors.secondary : Colors.text}
+              />
             </TouchableOpacity>
           </View>
         );
@@ -71,7 +159,7 @@ export default function Home() {
             <View>
               <View style={{ flexDirection: "row", alignItems: "center" }}>
                 <Text style={styles.dateLabel}>Hôm nay</Text>
-                <Feather name="sun" size={16} color={Colors.textSecondary} style={{ marginLeft: 6 }} />
+                <Feather name="sun" size={16} color={Colors.secondary} style={{ marginLeft: 6 }} />
               </View>
               <Text style={styles.dateText}>{formattedDate}</Text>
             </View>
@@ -87,7 +175,7 @@ export default function Home() {
               <FeatureCard
                 type="post"
                 title="Bài viết"
-                value="50+"
+                value="20+"
                 updated="bài viết về sức khỏe"
                 color="#8a9eff"
                 onPress={() => router.replace("/(blog)/blogList")}
@@ -95,7 +183,7 @@ export default function Home() {
               <FeatureCard
                 type="recipe"
                 title="Công thức"
-                value="100+"
+                value="30+"
                 updated="công thức nấu ăn"
                 color="#d15d5d"
                 onPress={() => router.replace("/(recipe)/recipeList")}
@@ -103,47 +191,83 @@ export default function Home() {
               <FeatureCard
                 type="ai"
                 title="Trò chuyện với AI"
-                value="7:30 pm"
-                updated="lần cuối 10 phút trước"
+                value="24/7"
+                updated="tìm các lời khuyên bổ ích"
                 color="#72C15F"
                 onPress={() => router.push("/(tabs)/chatbot")}
               />
               <FeatureCard
                 type="nutrition"
-                title="Phân tích dinh dưỡng"
-                value="960 calo"
-                updated="cập nhật 13 tiếng trước"
+                title="Theo dõi sức khỏe"
+                value="mỗi ngày"
+                updated="duy trì sức khỏe tốt"
                 color="#f39c6b"
-                onPress={() => router.replace("/(nutrition)/overview")}
+                onPress={() => router.replace("/(metric)/overview")}
               />
             </View>
           </View >
         );
       case "post":
         return (
-          <View style={styles.content}>
+          <View style={styles.postContent}>
             <View style={styles.section}>
               <SectionHeader
                 title="Bài viết"
                 onViewAll={() => router.replace("/(blog)/blogList")}
               />
-              <FlatList
-                data={destinations.slice(0, 3)}
-                keyExtractor={(item) => item.id}
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                renderItem={({ item }) => (
-                  <BlogCard
-                    key={item.id}
-                    id={item.id}
-                    name={item.name}
-                    location={item.location}
-                    rating={item.rating}
-                    image={item.image}
-                  />
-                )}
-                contentContainerStyle={styles.horizontalList}
+              {loadingPopular ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
+                <FlatList
+                  data={popularArticles.slice(0, 5)}
+                  keyExtractor={(item) => item.articleId.toString()}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  renderItem={({ item }) => (
+                    <BlogCard
+                      key={item.articleId.toString()}
+                      id={item.articleId.toString()}
+                      name={item.title}
+                      location={item.author}
+                      rating={item.likesCount}
+                      image={item.imageUrl}
+                      tags={item.tags.map((tag: any) => tag.tagName)}
+                    />
+                  )}
+                  contentContainerStyle={styles.horizontalList}
+                />
+              )}
+            </View>
+          </View>
+        );
+      case "recipe":
+        return (
+          <View style={styles.recipeContent}>
+            <View style={styles.section}>
+              <SectionHeader
+                title="Công thức"
+                onViewAll={() => router.replace("/(recipe)/recipeList")}
               />
+              {loadingPopularRecipe ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
+                <FlatList
+                  data={popularRecipes.slice(0, 5)}
+                  keyExtractor={(item) => item.recipeId.toString()}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  renderItem={({ item }) => (
+                    <RecipeCard
+                      id={item.recipeId.toString()}
+                      name={item.title}
+                      rating={item.likes}
+                      image={item.imageUrl}
+                      tags={(item.categories?.map((cat) => cat.categoryName)) || ["Dinh dưỡng"]}
+                    />
+                  )}
+                  contentContainerStyle={styles.horizontalList}
+                />
+              )}
             </View>
           </View>
         );
@@ -176,7 +300,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingHorizontal: 24,
     paddingTop: 16,
-    paddingBottom: 24,
+    paddingBottom: 16,
   },
   userInfo: {
     flexDirection: "row",
@@ -209,6 +333,15 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     alignItems: "center",
     justifyContent: "center",
+  },
+  postContent: {
+    paddingHorizontal: 24,
+    marginTop: 16,
+  },
+  recipeContent: {
+    paddingHorizontal: 24,
+    marginTop: 16,
+    marginBottom: 32
   },
   content: {
     paddingHorizontal: 24,
@@ -300,7 +433,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 24,
-    paddingBottom: 16,
+    paddingBottom: 14,
     paddingTop: 0,
   },
   dateIcon: {

@@ -8,12 +8,14 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using BCrypt.Net;
+using HealthMate.Repository.DTOs.UserDTO;
 
 namespace HealthMate.Repository.Repository.User
 {
     public class UserRepository : IUserRepository
     {
         private readonly NutritionAppContext _ctx;
+
         public UserRepository(NutritionAppContext ctx) => _ctx = ctx;
 
         public async Task<Models.User> CreateGoogleUserAsync(string email, string fullName)
@@ -57,7 +59,7 @@ namespace HealthMate.Repository.Repository.User
             {
                 _ctx.Users.Add(user);
                 await _ctx.SaveChangesAsync();
-                
+
                 // Reload the user with role information
                 return await _ctx.Users
                     .Include(u => u.Role)
@@ -71,20 +73,40 @@ namespace HealthMate.Repository.Repository.User
 
         public async Task<bool> DeleteUserAsync(int userId)
         {
-            var user = await _ctx.Users.FirstOrDefaultAsync(u => u.UserId == userId);
+            var user = await _ctx.Users
+            .Include(u => u.HealthMetrics)
+            .Include(u => u.Recipes)
+            .Include(u => u.Transactions)
+             .FirstOrDefaultAsync(u => u.UserId == userId);
             if (user == null)
             {
                 throw new InvalidOperationException("User not found");
             }
             try
             {
+                // Xóa HealthMetrics liên quan
+                if (user.HealthMetrics != null && user.HealthMetrics.Any())
+                {
+                    _ctx.HealthMetrics.RemoveRange(user.HealthMetrics);
+                }
+                // Xóa Recipes liên quan
+                if (user.Recipes != null && user.Recipes.Any())
+                {
+                    _ctx.Recipes.RemoveRange(user.Recipes);
+                }
+                // Xóa Transactions liên quan
+                if (user.Transactions != null && user.Transactions.Any())
+                {
+                    _ctx.Transactions.RemoveRange(user.Transactions);
+                }
+                // Xóa user
                 _ctx.Users.Remove(user);
                 await _ctx.SaveChangesAsync();
                 return true;
             }
             catch (Exception ex)
             {
-                throw new InvalidOperationException($"Failed to delete user ({user.UserId}, {user.FullName}): {ex.Message}", ex);
+                throw new InvalidOperationException($"Failed to delete user ({userId}): {ex.Message}", ex);
             }
         }
 
@@ -203,7 +225,7 @@ namespace HealthMate.Repository.Repository.User
             {
                 _ctx.Users.Add(user);
                 await _ctx.SaveChangesAsync();
-                
+
                 // Reload the user with role information
                 return await _ctx.Users
                     .Include(u => u.Role)
@@ -236,7 +258,7 @@ namespace HealthMate.Repository.Repository.User
                 existingUser.UpdatedAt = DateTime.UtcNow;
                 _ctx.Users.Update(existingUser);
                 _ctx.SaveChanges();
-                
+
                 return await _ctx.Users
                     .Include(u => u.Role)
                     .FirstOrDefaultAsync(u => u.UserId == existingUser.UserId);
@@ -245,6 +267,70 @@ namespace HealthMate.Repository.Repository.User
             {
                 throw new InvalidOperationException($"Failed to update user ({user.UserId}, {user.FullName}): {ex.Message}", ex);
             }
+        }
+
+        public async Task SetResetPasswordTokenAsync(string email, string token, DateTime expiry)
+        {
+            var user = await _ctx.Users.FirstOrDefaultAsync(u => u.Email == email);
+            if (user == null) throw new InvalidOperationException("User not found.");
+
+            user.ResetPasswordToken = token;
+            user.ResetPasswordTokenExpiry = expiry;
+            user.UpdatedAt = DateTime.UtcNow;
+            _ctx.Users.Update(user);
+            await _ctx.SaveChangesAsync();
+        }
+
+        public async Task<Models.User?> GetUserByResetTokenAsync(string email, string token)
+        {
+            return await _ctx.Users.FirstOrDefaultAsync(u =>
+                u.Email == email &&
+                u.ResetPasswordToken == token &&
+                u.ResetPasswordTokenExpiry > DateTime.UtcNow);
+        }
+
+        public async Task<bool> UpdatePasswordAsync(int userId, string newPasswordHash)
+        {
+            var user = await _ctx.Users.FirstOrDefaultAsync(u => u.UserId == userId);
+            if (user == null) return false;
+
+            user.PasswordHash = newPasswordHash;
+            user.ResetPasswordToken = null;
+            user.ResetPasswordTokenExpiry = null;
+            user.UpdatedAt = DateTime.UtcNow;
+            _ctx.Users.Update(user);
+
+            await _ctx.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<bool> ChangePasswordAsync(int userId, string newPasswordHash)
+        {
+            var user = await _ctx.Users.FirstOrDefaultAsync(u => u.UserId == userId);
+            if (user == null) return false;
+
+            // Không cần verify ở đây nữa
+
+            user.PasswordHash = newPasswordHash;
+            user.UpdatedAt = DateTime.UtcNow;
+            _ctx.Users.Update(user);
+            await _ctx.SaveChangesAsync();
+            return true;
+        }
+
+        public async Task<bool> UpdateProfileAsync(UpdateProfileDTO dto)
+        {
+            var user = await _ctx.Users.FirstOrDefaultAsync(u => u.UserId == dto.UserId);
+            if (user == null) return false;
+
+            user.FullName = dto.FullName;
+            user.AvatarUrl = dto.AvatarUrl;
+            user.DateOfBirth = dto.DateOfBirth;
+            user.UpdatedAt = DateTime.UtcNow;
+
+            _ctx.Users.Update(user);
+            await _ctx.SaveChangesAsync();
+            return true;
         }
     }
 }

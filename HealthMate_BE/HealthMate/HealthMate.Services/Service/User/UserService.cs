@@ -1,4 +1,4 @@
-﻿using HealthMate.Repository.DTOs.UserDTO;
+using HealthMate.Repository.DTOs.UserDTO;
 using HealthMate.Repository.Interface.User;
 using HealthMate.Repository.Models;
 using HealthMate.Services.Interface.User;
@@ -13,9 +13,11 @@ namespace HealthMate.Services.Service.User
     public class UserService : IUserService
     {
         private readonly IUserRepository _userRepository;
-        public UserService(IUserRepository userRepository)
+        private readonly IEmailService _emailService;
+        public UserService(IUserRepository userRepository, IEmailService emailService)
         {
             _userRepository = userRepository;
+            _emailService = emailService;
         }
         public async Task<bool> DeleteUserAsync(int userId)
         {
@@ -209,6 +211,141 @@ namespace HealthMate.Services.Service.User
             {
                 throw new InvalidOperationException($"Failed to update user with ID {updatedUser.UserId}: {ex.Message}", ex);
             }
+        }
+
+        public async Task<Repository.DTOs.UserDTO.UserDTO> UpdateUserStatusAsync(int userId, bool isActive)
+        {
+            if (userId <= 0)
+            {
+                throw new ArgumentException("User ID must be a positive integer.", nameof(userId));
+            }
+
+            var existingUser = await _userRepository.GetByIdAsync(userId);
+            if (existingUser == null)
+            {
+                throw new InvalidOperationException($"User with ID {userId} not found.");
+            }
+
+            existingUser.IsActive = isActive;
+            existingUser.UpdatedAt = DateTime.UtcNow;
+
+            try
+            {
+                Repository.Models.User user = await _userRepository.UpdateUserAsync(existingUser);
+                return new Repository.DTOs.UserDTO.UserDTO
+                {
+                    UserId = user.UserId,
+                    FullName = user.FullName,
+                    Email = user.Email,
+                    AvatarUrl = user.AvatarUrl,
+                    DateOfBirth = user.DateOfBirth,
+                    RoleId = user.RoleId,
+                    IsActive = user.IsActive,
+                    PremiumExpiry = user.PremiumExpiry
+                };
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException($"Failed to update user status with ID {userId}: {ex.Message}", ex);
+            }
+        }
+        public async Task<bool> RequestPasswordResetAsync(string email)
+        {
+            var user = await _userRepository.GetByEmailAsync(email);
+            if (user == null) return false;
+
+            string otp;
+            DateTime expiry;
+
+            // Nếu OTP hiện tại còn hiệu lực → gửi lại
+            if (!string.IsNullOrEmpty(user.ResetPasswordToken) && user.ResetPasswordTokenExpiry > DateTime.UtcNow)
+            {
+                otp = user.ResetPasswordToken!;
+                expiry = user.ResetPasswordTokenExpiry.Value;
+            }
+            else
+            {
+                otp = new Random().Next(100000, 999999).ToString();
+                expiry = DateTime.UtcNow.AddMinutes(5);
+                await _userRepository.SetResetPasswordTokenAsync(email, otp, expiry);
+            }
+
+            var htmlMessage = $@"
+        <p>Xin chào {user.FullName ?? "User"},</p>
+        <p>Bạn đã yêu cầu đặt lại mật khẩu. Đây là mã OTP của bạn:</p>
+        <h2 style='color: #4CAF50; font-size: 24px; text-align: center;'>{otp}</h2>
+        <p>Mã này sẽ hết hạn sau 5 phút.</p>";
+
+            await _emailService.SendEmailAsync(user.Email, "Đặt lại mật khẩu", htmlMessage);
+            return true;
+        }
+
+        public async Task<bool> VerifyOtpAsync(string email, string otp)
+        {
+            var user = await _userRepository.GetUserByResetTokenAsync(email, otp);
+            Console.WriteLine($"OTP = {user.ResetPasswordToken}, Expiry = {user.ResetPasswordTokenExpiry}, Now = {DateTime.UtcNow}");
+
+            return user != null;
+        }
+
+        public async Task<bool> ResetPasswordAsync(string email, string newPassword)
+        {
+            var user = await _userRepository.GetByEmailAsync(email);
+            if (user == null || user.ResetPasswordTokenExpiry < DateTime.UtcNow)
+                return false;
+
+            var hashedPassword = BCrypt.Net.BCrypt.HashPassword(newPassword);
+
+            return await _userRepository.UpdatePasswordAsync(user.UserId, hashedPassword);
+        }
+
+        public async Task<bool> ChangePasswordAsync(string email, string oldPassword, string newPassword)
+        {
+            if (string.IsNullOrEmpty(email))
+                throw new ArgumentException("Email cannot be null or empty.", nameof(email));
+            if (string.IsNullOrEmpty(oldPassword))
+                throw new ArgumentException("Old password cannot be null or empty.", nameof(oldPassword));
+            if (string.IsNullOrEmpty(newPassword))
+                throw new ArgumentException("New password cannot be null or empty.", nameof(newPassword));
+
+            var user = await _userRepository.GetByEmailAsync(email);
+            if (user == null)
+                throw new InvalidOperationException($"User with email {email} not found.");
+
+            // ✅ Verify old password with hashed password in DB
+            if (!BCrypt.Net.BCrypt.Verify(oldPassword, user.PasswordHash))
+                return false;
+
+            // ✅ Hash new password
+            var newPasswordHash = BCrypt.Net.BCrypt.HashPassword(newPassword);
+
+            return await _userRepository.ChangePasswordAsync(user.UserId, newPasswordHash);
+        }
+
+        public async Task<bool> SendEvalutionFormAsync(string email)
+        {
+            var user = await _userRepository.GetByEmailAsync(email);
+            if (user == null) return false;
+            var htmlMessage = $@"
+                <p>Xin chào {user.FullName ?? "User "},</p>
+                <p>Cảm ơn bạn đã đồng hành cùng HealthMate trong thời gian qua.</p>
+                <p>Chúng tôi rất tiếc khi biết rằng bạn đã quyết định xóa tài khoản của mình khỏi ứng dụng. Dù tôn trọng lựa chọn của bạn, nhưng chúng tôi luôn mong muốn được lắng nghe ý kiến và trải nghiệm thực tế từ người dùng để cải thiện sản phẩm ngày một tốt hơn.</p>
+                <p>Vì vậy, chúng tôi kính mời bạn dành ít phút để hoàn thành một bảng khảo sát ngắn tại đây:</p>
+                <p><a href='https://forms.gle/aNQdgtr1NcLDrSmQ6'>Khảo sát</a></p>
+                <p>Khảo sát này giúp chúng tôi hiểu rõ hơn về lý do bạn quyết định rời đi và làm thế nào để HealthMate có thể phục vụ người dùng tốt hơn trong tương lai.</p>
+                <p>Mọi đóng góp của bạn đều rất quý báu đối với đội ngũ phát triển.</p>
+                <p>Một lần nữa, xin chân thành cảm ơn bạn vì đã tin tưởng và sử dụng HealthMate.</p>
+                <p>Chúc bạn thật nhiều sức khỏe và thành công!</p>
+                <p>Trân trọng,<br>Đội ngũ HealthMate</p>";
+            await _emailService.SendEmailAsync(user.Email, "HealthMate – Chúng tôi trân trọng ý kiến đóng góp từ bạn", htmlMessage);
+            return true;
+        }
+        public async Task<bool> UpdateProfileAsync(UpdateProfileDTO dto)
+        {
+            var existingUser = await _userRepository.GetByIdAsync(dto.UserId);
+            if (existingUser == null)
+                throw new InvalidOperationException("User not found.");
+            return await _userRepository.UpdateProfileAsync(dto);
         }
     }
 }

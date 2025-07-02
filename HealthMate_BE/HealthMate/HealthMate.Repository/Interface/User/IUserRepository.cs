@@ -1,4 +1,5 @@
 ﻿using HealthMate.Repository.Base;
+using HealthMate.Repository.DTOs.UserDTO;
 using HealthMate.Repository.Models;
 using System;
 using System.Collections.Generic;
@@ -22,5 +23,12 @@ namespace HealthMate.Repository.Interface.User
         Task<List<HealthMate.Repository.Models.User>?> GetAllUsersByGoogleAsync(bool isGoogle);
         Task<HealthMate.Repository.Models.User> UpdateUserAsync(HealthMate.Repository.Models.User user);
         Task<bool> DeleteUserAsync(int userId);
+        Task SetResetPasswordTokenAsync(string email, string token, DateTime expiry);
+        Task<Models.User?> GetUserByResetTokenAsync(string email, string token);
+        Task<bool> UpdatePasswordAsync(int userId, string newPasswordHash);
+        Task<bool> ChangePasswordAsync(int userId, string newPasswordHash);
+        Task<bool> UpdateProfileAsync(UpdateProfileDTO dto);
+
+
     }
 }
